@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/exhaustive-deps, @typescript-eslint/no-explicit-any */
 'use client';
 
-import { ChevronUp, RotateCcw,Search, X } from 'lucide-react';
+import { ChevronUp, RotateCcw, Search, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useMemo } from 'react';
 import { useEffect,useRef, useState } from 'react';
@@ -74,6 +74,15 @@ function SearchPageClient() {
   });
   // 新增状态：记录当前展开的筛选框
   const [openFilter, setOpenFilter] = useState<string | null>(null);
+  // 排序状态：字段与顺序（默认：按源数量，倒序）
+  const [sortField, setSortField] = useState<'sources' | 'year' | 'episodes'>(() => {
+    const sf = searchParams.get('sort');
+    return sf === 'sources' || sf === 'episodes' || sf === 'year' ? sf : 'sources';
+  });
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() => {
+    const so = searchParams.get('order');
+    return so === 'asc' ? 'asc' : 'desc';
+  });
 
 
   const [viewMode, setViewMode] = useState<boolean>(() => {
@@ -144,6 +153,64 @@ function SearchPageClient() {
       })
       .filter(([_, group]) => group.length > 0);
   }, [aggregatedResults, filterSources, selectedTitles, selectedYears]);
+
+  // 对聚合结果进行排序（支持：源数量、年份、集数；升序/降序）。保留“标题包含关键字”的结果优先。
+  const sortedAggregatedResults: [string, SearchResult[]][] = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    const isExact = (group: SearchResult[]) => group[0].title.toLowerCase().includes(query);
+    const getYearValue = (group: SearchResult[]) => {
+      const y = group[0].year;
+      if (!y || y === 'unknown') return null;
+      const n = Number(y);
+      return Number.isNaN(n) ? null : n;
+    };
+    const getSourcesCount = (group: SearchResult[]) => group.length;
+    const getEpisodesCount = (group: SearchResult[]) => {
+      let maxEpisodes = 0;
+      for (const item of group) {
+        const count = Array.isArray(item.episodes) ? item.episodes.length : 0;
+        if (count > maxEpisodes) maxEpisodes = count;
+      }
+      return maxEpisodes;
+    };
+
+    const valueOf = (group: SearchResult[]) => {
+      switch (sortField) {
+        case 'sources':
+          return getSourcesCount(group);
+        case 'episodes':
+          return getEpisodesCount(group);
+        case 'year':
+        default:
+          return getYearValue(group);
+      }
+    };
+
+    const compare = (a: [string, SearchResult[]], b: [string, SearchResult[]]) => {
+      const aVal = valueOf(a[1]);
+      const bVal = valueOf(b[1]);
+
+      const aIsNull = aVal === null || aVal === undefined;
+      const bIsNull = bVal === null || bVal === undefined;
+      if (aIsNull && !bIsNull) return 1;
+      if (!aIsNull && bIsNull) return -1;
+      if (aIsNull && bIsNull) return 0;
+
+      if ((aVal as number) < (bVal as number)) return sortOrder === 'asc' ? -1 : 1;
+      if ((aVal as number) > (bVal as number)) return sortOrder === 'asc' ? 1 : -1;
+
+      return a[1][0].title.localeCompare(b[1][0].title);
+    };
+
+    const exact: [string, SearchResult[]][] = [];
+    const others: [string, SearchResult[]][] = [];
+    for (const item of filteredAggregatedResults) {
+      (isExact(item[1]) ? exact : others).push(item);
+    }
+    exact.sort(compare);
+    others.sort(compare);
+    return [...exact, ...others];
+  }, [filteredAggregatedResults, sortField, sortOrder, searchQuery]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -292,12 +359,24 @@ function SearchPageClient() {
     } else {
       params.delete('years');
     }
+
+    // 排序字段与顺序
+    if (sortField) {
+      params.set('sort', sortField);
+    } else {
+      params.delete('sort');
+    }
+    if (sortOrder) {
+      params.set('order', sortOrder);
+    } else {
+      params.delete('order');
+    }
     
     // 只在有搜索查询时才更新 URL
     if (searchParams.get('q')) {
       window.history.replaceState({}, '', `/search?${params.toString()}`);
     }
-  }, [filterSources, selectedTitles, selectedYears, searchParams]); // 移除 selectedSources 依赖，避免选择搜索源时触发重新搜索
+  }, [filterSources, selectedTitles, selectedYears, sortField, sortOrder, searchParams]); // 移除 selectedSources 依赖，避免选择搜索源时触发重新搜索
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -363,6 +442,11 @@ function SearchPageClient() {
   const titleOptions = Array.from(new Set(searchResults.map((r) => r.title))).sort();
   const yearOptions = Array.from(new Set(searchResults.map((r) => r.year))).sort();
 
+  // 处理排序字段变化的包装函数
+  const handleSortFieldChange = (field: string) => {
+    setSortField(field as 'sources' | 'year' | 'episodes');
+  };
+
   return (
     <PageLayout activePath="/search">
       <div className="px-4 sm:px-10 py-4 sm:py-8 overflow-visible mb-10">
@@ -399,7 +483,7 @@ function SearchPageClient() {
 
         {/* 筛选组件弹窗 */}
         {showResults && searchResults.length > 0 && (
-          <div className="flex gap-4 flex-wrap mb-6 max-w-[95%] mx-auto">
+          <div className="flex gap-3 flex-wrap mb-4 max-w-[95%] mx-auto">
           <FilterOptions
             title="来源"
             options={sourceOptions}
@@ -424,17 +508,37 @@ function SearchPageClient() {
             openFilter={openFilter}
             setOpenFilter={setOpenFilter}
           />
+
+          <FilterOptions
+            title="排序"
+            options={[]}
+            selectedOptions={[]}
+            onChange={() => {/* no-op for sort filter */}}
+            openFilter={openFilter}
+            setOpenFilter={setOpenFilter}
+            // 排序相关属性
+            sortField={sortField}
+            onSortFieldChange={handleSortFieldChange}
+            sortOrder={sortOrder}
+            onSortOrderChange={setSortOrder}
+            sortOptions={[
+              { value: 'sources', label: '按源数量' },
+              { value: 'year', label: '按年份' },
+              { value: 'episodes', label: '按集数' }
+            ]}
+          />
+
           
           {/* 全局清空筛选按钮 - 只清空标题、年份和来源筛选，不包含搜索源 */}
           {(filterSources.length > 0 || selectedTitles.length > 0 || selectedYears.length > 0) && (
-            <div className="flex items-center bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden mr-2 mb-2">
+            <div className="flex items-center bg-white/10 dark:bg-gray-800/50 backdrop-blur-md rounded-xl overflow-hidden border border-white/20 dark:border-gray-700/50 shadow-lg hover:shadow-xl transition-all duration-300">
               <button
                 onClick={() => {
                   setFilterSources([]);
                   setSelectedTitles([]);
                   setSelectedYears([]);
                 }}
-                className="flex items-center gap-1 px-3 py-2 text-sm font-medium hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
+                className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-gray-800 dark:text-gray-200 hover:bg-white/20 dark:hover:bg-gray-700/30 transition-all duration-300"
                 title="清空所有筛选条件"
               >
                 <RotateCcw className="w-4 h-4" />
@@ -447,7 +551,7 @@ function SearchPageClient() {
 
 
         {/* 搜索结果 */}
-        <div className="max-w-[95%] mx-auto mt-4 overflow-visible">
+        <div className="max-w-[95%] mx-auto overflow-visible">
           {isLoading ? (
             <div className="flex justify-center items-center h-40">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500"></div>
@@ -495,7 +599,7 @@ function SearchPageClient() {
               className="justify-start grid grid-cols-3 gap-x-2 gap-y-14 sm:gap-y-20 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,_minmax(11rem,_1fr))] sm:gap-x-8"
             >
               {viewMode
-                ? filteredAggregatedResults.map(([mapKey, group], index) => (
+                ? sortedAggregatedResults.map(([mapKey, group], index) => (
                     <div key={`agg-${mapKey}-${index}`} className="w-full">
                       <VideoCard
                         from="search"
@@ -504,32 +608,94 @@ function SearchPageClient() {
                       />
                     </div>
                   ))
-                : searchResults
-                    .filter((item) => {
+                : (() => {
+                    const filteredResults = searchResults.filter((item) => {
                       // 来源筛选：如果没有选择任何来源（filterSources.length === 0），默认显示全部；如果选择了来源，只保留包含至少一个选中来源的影片
                       const sourceMatch = filterSources.length === 0 ||
                         filterSources.includes(item.source_name);
                       const titleMatch = selectedTitles.length === 0 || selectedTitles.includes(item.title);
                       const yearMatch = selectedYears.length === 0 || selectedYears.includes(item.year);
                       return sourceMatch && titleMatch && yearMatch;
-                    })
-                    .map((item, index) => (
-                      <div key={`all-${item.source}-${item.id}-${index}`} className="w-full">
-                        <VideoCard
-                          id={item.id}
-                          title={item.title}
-                          poster={item.poster}
-                          episodes={item.episodes.length}
-                          source={item.source}
-                          source_name={item.source_name}
-                          douban_id={item.douban_id}
-                          query={searchQuery.trim() !== item.title ? searchQuery.trim() : ''}
-                          year={item.year}
-                          from="search"
-                          type={item.episodes.length > 1 ? 'tv' : 'movie'}
-                        />
-                      </div>
-                    ))}
+                    });
+
+                    // 对非聚合结果进行排序
+                    return filteredResults
+                      .sort((a, b) => {
+                        const query = searchQuery.trim().toLowerCase();
+                        const aExactMatch = a.title.toLowerCase().includes(query);
+                        const bExactMatch = b.title.toLowerCase().includes(query);
+                        
+                        // 精确匹配的优先
+                        if (aExactMatch && !bExactMatch) return -1;
+                        if (!aExactMatch && bExactMatch) return 1;
+
+                        let aVal: number | string | null = null;
+                        let bVal: number | string | null = null;
+
+                        switch (sortField) {
+                          case 'sources':
+                            // 在非聚合模式下，源数量总是1，所以按源名称排序
+                            aVal = a.source_name;
+                            bVal = b.source_name;
+                            break;
+                          case 'episodes':
+                            aVal = a.episodes.length;
+                            bVal = b.episodes.length;
+                            break;
+                          case 'year':
+                          default:
+                            {
+                              const aYear = a.year;
+                              const bYear = b.year;
+                              if (aYear && aYear !== 'unknown') {
+                                const aNum = Number(aYear);
+                                aVal = Number.isNaN(aNum) ? aYear : aNum;
+                              }
+                              if (bYear && bYear !== 'unknown') {
+                                const bNum = Number(bYear);
+                                bVal = Number.isNaN(bNum) ? bYear : bNum;
+                              }
+                            }
+                            break;
+                        }
+
+                        const aIsNull = aVal === null || aVal === undefined;
+                        const bIsNull = bVal === null || bVal === undefined;
+                        if (aIsNull && !bIsNull) return 1;
+                        if (!aIsNull && bIsNull) return -1;
+                        if (aIsNull && bIsNull) return 0;
+
+                        if (typeof aVal === 'number' && typeof bVal === 'number') {
+                          if (aVal < bVal) return sortOrder === 'asc' ? -1 : 1;
+                          if (aVal > bVal) return sortOrder === 'asc' ? 1 : -1;
+                        } else {
+                          // 字符串比较
+                          const aStr = String(aVal);
+                          const bStr = String(bVal);
+                          if (aStr < bStr) return sortOrder === 'asc' ? -1 : 1;
+                          if (aStr > bStr) return sortOrder === 'asc' ? 1 : -1;
+                        }
+
+                        return a.title.localeCompare(b.title);
+                      })
+                      .map((item, index) => (
+                        <div key={`all-${item.source}-${item.id}-${index}`} className="w-full">
+                          <VideoCard
+                            id={item.id}
+                            title={item.title}
+                            poster={item.poster}
+                            episodes={item.episodes.length}
+                            source={item.source}
+                            source_name={item.source_name}
+                            douban_id={item.douban_id}
+                            query={searchQuery.trim() !== item.title ? searchQuery.trim() : ''}
+                            year={item.year}
+                            from="search"
+                            type={item.episodes.length > 1 ? 'tv' : 'movie'}
+                          />
+                        </div>
+                      ));
+                  })()}
               {searchResults.length === 0 && (
                 <div className="col-span-full text-center text-gray-500 py-8 dark:text-gray-400">未找到相关结果</div>
               )}
