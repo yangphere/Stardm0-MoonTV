@@ -303,9 +303,21 @@ function SearchPageClient() {
     }
   };
 
-  // 搜索历史、滚动监听
+  // 搜索历史、滚动监听和自动搜索处理
   useEffect(() => {
-    !searchParams.get('q') && document.getElementById('searchInput')?.focus();
+    // 检查URL中是否有搜索查询参数
+    const urlQuery = searchParams.get('q');
+    if (urlQuery) {
+      // 触发搜索
+      setSearchQuery(urlQuery);
+      setIsLoading(true);
+      setShowResults(true);
+      fetchSearchResults(urlQuery);
+      addSearchHistory(urlQuery);
+    } else {
+      document.getElementById('searchInput')?.focus();
+    }
+    
     getSearchHistory().then(setSearchHistory);
     const unsubscribe = subscribeToDataUpdates('searchHistoryUpdated', setSearchHistory);
     const handleScroll = () => {
@@ -329,21 +341,6 @@ function SearchPageClient() {
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   }, []);
-
-  // URL 搜索变化
-  useEffect(() => {
-    const query = searchParams.get('q');
-    if (query) {
-      setSearchQuery(query);
-      
-      fetchSearchResults(query);
-      setShowSuggestions(false);
-      addSearchHistory(query);
-    } else {
-      setShowResults(false);
-      setShowSuggestions(false);
-    }
-  }, [searchParams]);
 
   // 更新筛选状态到 URL
   useEffect(() => {
@@ -401,10 +398,11 @@ function SearchPageClient() {
     if (searchQuery.trim()) setShowSuggestions(true);
   };
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = searchQuery.trim().replace(/\s+/g, ' ');
+  const handleSearch = (e?: React.FormEvent, query?: string) => {
+    if (e) e.preventDefault(); // 如果是表单触发，阻止默认行为
+    const trimmed = (query ?? searchQuery).trim().replace(/\s+/g, ' ');
     if (!trimmed) return;
+  
     setSearchQuery(trimmed);
     setIsLoading(true);
     setShowResults(true);
@@ -735,11 +733,7 @@ function SearchPageClient() {
         onClick={() => {
           if (selectedHistoryItem === item) {
             // 第二次点击触发搜索
-            const urlParams = new URLSearchParams();
-            urlParams.set('q', item.trim());
-            const timeoutSeconds = getRequestTimeout();
-            urlParams.set('timeout', timeoutSeconds.toString());
-            router.push(`/search?${urlParams.toString()}`);
+            handleSearch(undefined, item);
           } else {
             // 第一次点击，选中历史项
             setSearchQuery(item);
