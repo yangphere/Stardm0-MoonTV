@@ -73,7 +73,7 @@ export class D1Storage implements IStorage {
   async registerUser(userName: string, password: string): Promise<void> {
     await this.db
       .prepare('INSERT INTO users (username, password) VALUES (?, ?)')
-      .bind(userName, password)
+      .bind(userName, String(password))
       .run();
   }
 
