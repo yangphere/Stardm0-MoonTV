@@ -62,6 +62,7 @@ function PlayPageClient() {
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SearchResult | null>(null);
   const [isDanmakuPluginReady, setIsDanmakuPluginReady] = useState(false);
+  const [isDanmakuLoading, setIsDanmakuLoading] = useState(false);
 
 
   // 收藏状态
@@ -927,6 +928,7 @@ function PlayPageClient() {
     if (!autoDanmakuEnabled || !detail || !isDanmakuPluginReady) return;
 
     (async () => {
+      setIsDanmakuLoading(true);
       try {
         const title = videoTitleRef.current;
 
@@ -973,6 +975,8 @@ function PlayPageClient() {
         }
       } catch (err) {
         console.error("初始化自动加载弹幕失败:", err);
+      } finally {
+        setIsDanmakuLoading(false);
       }
     })();
   }, [currentEpisodeIndex, autoDanmakuEnabled, isDanmakuPluginReady]);
@@ -2232,6 +2236,14 @@ function PlayPageClient() {
                             : '🔄 视频加载中...'}
                         </p>
                       </div>
+                    </div>
+                  </div>
+                )}
+                {/* 弹幕加载提示 */}
+                {isDanmakuLoading && (
+                  <div className="absolute top-4 left-4 right-4 z-[400] flex justify-center">
+                    <div className="bg-gray-800/90 text-white px-4 py-2 rounded-lg shadow-lg">
+                      正在自动加载弹幕...
                     </div>
                   </div>
                 )}
